@@ -1,0 +1,93 @@
+import ccxt
+import pandas as pd
+import numpy as np
+import datetime
+import tkinter as tk
+from tkinter import scrolledtext
+
+# Шаг 1: Получаем данные с Binance API
+def fetch_binance_data(symbol='BTC/USDT', timeframe='1d', limit=100):
+    exchange = ccxt.binance()
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    
+    # Преобразуем данные в DataFrame
+    data = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+    data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+    
+    return data
+
+# Шаг 2: Расчет индикаторов
+
+# 2.1: Расчет 50-дневной скользящей средней
+def calculate_sma(data, window=50):
+    data['SMA50'] = data['close'].rolling(window=window).mean()
+
+# 2.2: Расчет RSI
+def calculate_rsi(data, window=14):
+    delta = data['close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+
+    avg_gain = gain.rolling(window=window).mean()
+    avg_loss = loss.rolling(window=window).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    data['RSI'] = rsi
+
+# Шаг 3: Генерация торговых сигналов
+def generate_signal(data):
+    # Проверка сигналов по RSI
+    if data['RSI'].iloc[-1] < 30:
+        signal = "Покупка: Актив перепродан, RSI ниже 30."
+    elif data['RSI'].iloc[-1] > 70:
+        signal = "Продажа: Актив перекуплен, RSI выше 70."
+    else:
+        signal = "Нет сигнала: Рынок в нейтральной зоне."
+    
+    # Проверка сигналов по скользящим средним (SMA)
+    if data['close'].iloc[-1] > data['SMA50'].iloc[-1]:
+        signal += "\nДополнительный сигнал: Цена выше SMA50 — потенциальный рост."
+    else:
+        signal += "\nДополнительный сигнал: Цена ниже SMA50 — потенциальное падение."
+    
+    return signal
+
+# Шаг 4: Визуализация и вывод анализа в Tkinter окне
+def analyze_market(symbol='BTC/USDT', timeframe='1d', limit=100):
+    # 1. Получаем данные с Binance
+    data = fetch_binance_data(symbol, timeframe, limit)
+    
+    # 2. Расчет индикаторов
+    calculate_sma(data)
+    calculate_rsi(data)
+    
+    # 3. Генерация торгового сигнала
+    signal = generate_signal(data)
+    
+    # 4. Выводим информацию в графическом окне
+    window = tk.Tk()
+    window.title(f"Технический анализ {symbol}")
+
+    # Устанавливаем размер окна
+    window.geometry("500x400")
+
+    # Добавляем виджет для прокручиваемого текста (скроллбар)
+    text_area = scrolledtext.ScrolledText(window, wrap=tk.WORD, width=60, height=20)
+    text_area.pack(padx=10, pady=10)
+    
+    # Вставляем результаты анализа в текстовую область
+    text_area.insert(tk.END, f"Рынок: {symbol}\n")
+    text_area.insert(tk.END, f"Время последнего обновления: {data['timestamp'].iloc[-1]}\n")
+    text_area.insert(tk.END, f"Цена закрытия последней свечи: {data['close'].iloc[-1]}\n")
+    text_area.insert(tk.END, "\nАнализ:\n")
+    text_area.insert(tk.END, signal)
+    
+    # Делаем текст доступным только для чтения
+    text_area.config(state=tk.DISABLED)
+    
+    # Запуск главного цикла окна
+    window.mainloop()
+
+# Запуск анализа для BTC/USDT на интервале 1 день
+analyze_market('BTC/USDT', '1d', 100)
