@@ -1,0 +1,105 @@
+import ccxt
+import pandas as pd
+import streamlit as st
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
+
+# Функция для получения данных с Coinbase API
+def fetch_coinbase_data(symbol='BTC-USD', timeframe='1m', limit=1440):
+    try:
+        exchange = ccxt.coinbase()  # Используем Coinbase API
+        since = int((datetime.now() - timedelta(days=1)).timestamp() * 1000)  # Данные за последние 24 часа
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+
+        # Преобразуем данные в DataFrame
+        data = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+        return data
+    except Exception as e:
+        st.error(f"Ошибка при запросе данных: {e}")
+        return None
+
+# Функция для построения интерактивного графика с анимацией
+def animated_plot(data, figure=None):
+    if figure is None:
+        # Инициализация графика
+        figure = go.Figure()
+
+        # Добавляем линию с ценами закрытия
+        figure.add_trace(go.Scatter(
+            x=data['timestamp'],
+            y=data['close'],
+            mode='lines',
+            name='Цена закрытия',
+            line=dict(color='blue')
+        ))
+
+        # Настройка оформления графика
+        figure.update_layout(
+            title="График цен с плавным обновлением",
+            xaxis_title="Время",
+            yaxis_title="Цена (USD)",
+            template="plotly_dark"
+        )
+    else:
+        # Обновляем данные на графике
+        figure.data[0].x = data['timestamp']
+        figure.data[0].y = data['close']
+
+    return figure
+
+# Основная функция Streamlit
+def main():
+    st.set_page_config(page_title="Криптовалютный анализ", layout="wide")
+
+    # Заголовок
+    st.title("Криптовалютный анализ с интерактивной визуализацией")
+
+    # Боковая панель для управления параметрами
+    st.sidebar.header("Настройки")
+
+    # Выбор криптовалютной пары
+    symbol = st.sidebar.selectbox(
+        "Выберите пару",
+        ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ADA-USD', 'DOGE-USD']
+    )
+
+    # Выбор временного интервала
+    timeframe = st.sidebar.selectbox(
+        "Выберите временной интервал",
+        ['1m', '5m', '15m', '1h', '1d']
+    )
+
+    # Интервал автообновления
+    refresh_interval = st.sidebar.number_input(
+        "Интервал автообновления (в секундах)",
+        min_value=10, max_value=3600, value=60
+    )
+    st_autorefresh(interval=refresh_interval * 1000, limit=None, key="auto_refresh")
+
+    # Заголовок выбранной пары
+    st.subheader(f"Анализ пары: {symbol}")
+
+    # Получение данных
+    with st.spinner("Загружаются данные..."):
+        data = fetch_coinbase_data(symbol, timeframe)
+
+    if data is not None:
+        # Инициализация графика
+        if "figure" not in st.session_state:
+            st.session_state.figure = animated_plot(data)
+        else:
+            # Обновление существующего графика
+            st.session_state.figure = animated_plot(data, st.session_state.figure)
+
+        # Показ графика
+        st.plotly_chart(st.session_state.figure, use_container_width=True)
+
+        # Текущая информация
+        st.write("### Текущая информация")
+        st.write(f"Последнее обновление: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        st.write(f"Цена закрытия: {data['close'].iloc[-1]:.2f} USD")
+
+if __name__ == "__main__":
+    main()
