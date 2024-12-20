@@ -8,11 +8,13 @@ from streamlit_autorefresh import st_autorefresh
 
 
 # Функция для получения данных с Coinbase API
-def fetch_coinbase_data(symbol='BTC-USD', timeframe='1m', limit=180):
+@st.cache_data(ttl=60)
+def fetch_coinbase_data(symbol='BTC-USD', timeframe='1m', days=1):
     try:
         exchange = ccxt.coinbase()  # Используем Coinbase API
-        since = int((datetime.now() - timedelta(days=1)).timestamp() * 1000)  # Данные за последние 24 часа
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
+        since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)  # Данные за заданное количество дней
+        until = int(datetime.now().timestamp() * 1000)  # Включить текущий момент
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since)
 
         # Преобразуем данные в DataFrame
         data = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -109,48 +111,6 @@ def generate_signals(data):
     return signals, details
 
 
-# Общий анализ на основе всех индикаторов
-def aggregate_analysis(data):
-    weights = {"RSI": 1, "MACD": 1, "Bollinger Bands": 1, "Stochastic": 1}
-    score = 0
-
-    # RSI
-    if data['RSI'].iloc[-1] < 30:
-        score += weights["RSI"]
-    elif data['RSI'].iloc[-1] > 70:
-        score -= weights["RSI"]
-
-    # MACD
-    if data['MACD'].iloc[-1] > data['Signal Line'].iloc[-1]:
-        score += weights["MACD"]
-    elif data['MACD'].iloc[-1] < data['Signal Line'].iloc[-1]:
-        score -= weights["MACD"]
-
-    # Bollinger Bands
-    if data['close'].iloc[-1] < data['BB_Lower'].iloc[-1]:
-        score += weights["Bollinger Bands"]
-    elif data['close'].iloc[-1] > data['BB_Upper'].iloc[-1]:
-        score -= weights["Bollinger Bands"]
-
-    # Stochastic Oscillator
-    if data['Stochastic_K'].iloc[-1] < 20:
-        score += weights["Stochastic"]
-    elif data['Stochastic_K'].iloc[-1] > 80:
-        score -= weights["Stochastic"]
-
-    # Анализ по шкале
-    if score >= 3:
-        return "Сильная покупка"
-    elif score <= -3:
-        return "Сильная продажа"
-    elif score > 0:
-        return "Покупка"
-    elif score < 0:
-        return "Продажа"
-    else:
-        return "Нейтрально"
-
-
 # Функции для отображения графиков индикаторов
 def plot_price_chart(data):
     st.write("### Общий график цен")
@@ -209,21 +169,53 @@ def plot_macd_chart(data):
     st.pyplot(fig)
 
 
-# Streamlit приложение
+# Основная функция Streamlit
 def main():
     st.set_page_config(page_title="Криптовалютный анализ", layout="wide")
 
     # Заголовок
     st.title("Криптовалютный анализ")
-    st.subheader("BTC-USD")
 
-    # Автообновление через таймер
-    refresh_interval = st.number_input("Интервал автообновления (в секундах)", min_value=10, max_value=3600, value=60)
+    # Боковая панель для управления параметрами
+    st.sidebar.header("Настройки")
+
+    # Выбор криптовалютной пары
+    symbol = st.sidebar.selectbox(
+        "Выберите пару",
+        ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ADA-USD', 'DOGE-USD']
+    )
+
+    # Выбор временного интервала
+    timeframe = st.sidebar.selectbox(
+        "Выберите временной интервал",
+        ['1m', '5m', '15m', '1h', '1d']
+    )
+
+    # Выбор количества дней для загрузки данных
+    days = st.sidebar.slider(
+        "Количество дней для загрузки данных",
+        min_value=1, max_value=30, value=1
+    )
+
+    # Выбор отображаемых индикаторов
+    show_sma = st.sidebar.checkbox("Показать SMA", value=True)
+    show_bollinger = st.sidebar.checkbox("Показать Bollinger Bands", value=True)
+    show_stochastic = st.sidebar.checkbox("Показать Stochastic", value=True)
+    show_macd = st.sidebar.checkbox("Показать MACD", value=True)
+
+    # Интервал автообновления
+    refresh_interval = st.sidebar.number_input(
+        "Интервал автообновления (в секундах)",
+        min_value=10, max_value=3600, value=60
+    )
     st_autorefresh(interval=refresh_interval * 1000, limit=None, key="auto_refresh")
+
+    # Заголовок выбранной пары
+    st.subheader(f"Анализ пары: {symbol}")
 
     # Получение данных
     with st.spinner("Загружаются данные..."):
-        data = fetch_coinbase_data()
+        data = fetch_coinbase_data(symbol, timeframe, days)
 
     if data is not None:
         calculate_indicators(data)
@@ -238,26 +230,25 @@ def main():
 
         # Графики индикаторов
         with col1:
-            plot_sma_chart(data)
+            if show_sma:
+                plot_sma_chart(data)
 
         with col2:
-            plot_bollinger_chart(data)
+            if show_bollinger:
+                plot_bollinger_chart(data)
 
         with col3:
-            plot_stochastic_chart(data)
+            if show_stochastic:
+                plot_stochastic_chart(data)
 
         with col4:
-            plot_macd_chart(data)
+            if show_macd:
+                plot_macd_chart(data)
 
         # Текущая информация
         st.write("### Текущая информация")
         st.write(f"Последнее обновление: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         st.write(f"Цена закрытия: {data['close'].iloc[-1]:.2f} USD")
-
-        # Общий анализ рынка
-        st.write("### Общий анализ рынка")
-        overall_analysis = aggregate_analysis(data)
-        st.write(f"**{overall_analysis}**")
 
         # Торговые сигналы
         signals, details = generate_signals(data)
