@@ -2,16 +2,15 @@ import ccxt
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
 
-# Функция для получения данных с Coinbase API
+# Функция для получения данных с Kraken API
 @st.cache_data(ttl=60)
-def fetch_coinbase_data(symbol='BTC-USD', timeframe='1m', days=1):
+def fetch_kraken_data(symbol='BTC/USD', timeframe='1m', days=1):
     try:
-        exchange = ccxt.coinbase()  # Используем Coinbase API
+        exchange = ccxt.kraken()  # Используем Kraken API
         since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)  # Данные за заданное количество дней
         until = int(datetime.now().timestamp() * 1000)  # Включить текущий момент
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since)
@@ -111,69 +110,73 @@ def generate_signals(data):
     return signals, details
 
 
-# Функции для отображения графиков индикаторов
+# Функции для отображения графиков индикаторов с использованием Plotly
 def plot_price_chart(data):
-    st.write("### Общий график цен")
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(data['timestamp'], data['close'], label='Цена закрытия', color='blue')
-    ax.set_xlabel("Время")
-    ax.set_ylabel("Цена (USD)")
-    ax.legend()
-    st.pyplot(fig)
+    """
+    Функция для построения графика свечей (OHLC).
+    """
+    fig = go.Figure()
+
+    # Добавляем график свечей
+    fig.add_trace(go.Candlestick(
+        x=data['timestamp'],
+        open=data['open'],
+        high=data['high'],
+        low=data['low'],
+        close=data['close'],
+        name="Цена"
+    ))
+
+    # Настройки осей
+    fig.update_layout(
+        title="График цен",
+        xaxis_title="Время",
+        yaxis_title="Цена",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark"
+    )
+    st.plotly_chart(fig)
 
 
 def plot_sma_chart(data):
     st.write("#### SMA (50)")
-    fig, ax = plt.subplots(figsize=(5, 3))
-    ax.plot(data['timestamp'], data['close'], label='Цена закрытия', color='blue')
-    ax.plot(data['timestamp'], data['SMA50'], label='SMA (50)', color='red')
-    ax.set_xlabel("Время")
-    ax.set_ylabel("Цена (USD)")
-    ax.legend()
-    st.pyplot(fig)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['close'], mode='lines', name='Цена закрытия', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['SMA50'], mode='lines', name='SMA (50)', line=dict(color='red')))
+    fig.update_layout(title="SMA 50", xaxis_title="Время", yaxis_title="Цена (USD)", template="plotly_dark")
+    st.plotly_chart(fig)
 
 
 def plot_bollinger_chart(data):
     st.write("#### Bollinger Bands")
-    fig, ax = plt.subplots(figsize=(5, 3))
-    ax.plot(data['timestamp'], data['close'], label='Цена закрытия', color='blue')
-    ax.plot(data['timestamp'], data['BB_Upper'], label='Верхняя полоса Боллинджера', color='green', linestyle='--')
-    ax.plot(data['timestamp'], data['BB_Lower'], label='Нижняя полоса Боллинджера', color='red', linestyle='--')
-    ax.set_xlabel("Время")
-    ax.set_ylabel("Цена (USD)")
-    ax.legend()
-    st.pyplot(fig)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['close'], mode='lines', name='Цена закрытия', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['BB_Upper'], mode='lines', name='Верхняя полоса Боллинджера', line=dict(color='green', dash='dash')))
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['BB_Lower'], mode='lines', name='Нижняя полоса Боллинджера', line=dict(color='red', dash='dash')))
+    fig.update_layout(title="Bollinger Bands", xaxis_title="Время", yaxis_title="Цена (USD)", template="plotly_dark")
+    st.plotly_chart(fig)
 
 
 def plot_stochastic_chart(data):
     st.write("#### Stochastic Oscillator")
-    fig, ax = plt.subplots(figsize=(5, 3))
-    ax.plot(data['timestamp'], data['Stochastic_K'], label='%K', color='purple')
-    ax.plot(data['timestamp'], data['Stochastic_D'], label='%D', color='orange', linestyle='--')
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_xlabel("Время")
-    ax.set_ylabel("Стохастик")
-    ax.legend()
-    st.pyplot(fig)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['Stochastic_K'], mode='lines', name='%K', line=dict(color='purple')))
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['Stochastic_D'], mode='lines', name='%D', line=dict(color='orange', dash='dash')))
+    fig.update_layout(title="Stochastic Oscillator", xaxis_title="Время", yaxis_title="Стохастик", template="plotly_dark")
+    st.plotly_chart(fig)
 
 
 def plot_macd_chart(data):
     st.write("#### MACD")
-    fig, ax = plt.subplots(figsize=(5, 3))
-    ax.plot(data['timestamp'], data['MACD'], label='MACD', color='cyan')
-    ax.plot(data['timestamp'], data['Signal Line'], label='Сигнальная линия MACD', color='magenta', linestyle='--')
-    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_xlabel("Время")
-    ax.set_ylabel("MACD")
-    ax.legend()
-    st.pyplot(fig)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['MACD'], mode='lines', name='MACD', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['Signal Line'], mode='lines', name='Сигнальная линия', line=dict(color='red')))
+    fig.update_layout(title="MACD", xaxis_title="Время", yaxis_title="MACD", template="plotly_dark")
+    st.plotly_chart(fig)
 
 
-# Основная функция Streamlit
+# Главная функция для отображения всего анализа
 def main():
-    st.set_page_config(page_title="Криптовалютный анализ", layout="wide")
-
-    # Заголовок
     st.title("Криптовалютный анализ")
 
     # Боковая панель для управления параметрами
@@ -182,7 +185,7 @@ def main():
     # Выбор криптовалютной пары
     symbol = st.sidebar.selectbox(
         "Выберите пару",
-        ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ADA-USD', 'DOGE-USD']
+        ['BTC/USD', 'ETH/USD', 'SOL/USD', 'ADA/USD', 'DOGE/USD']
     )
 
     # Выбор временного интервала
@@ -215,7 +218,7 @@ def main():
 
     # Получение данных
     with st.spinner("Загружаются данные..."):
-        data = fetch_coinbase_data(symbol, timeframe, days)
+        data = fetch_kraken_data(symbol, timeframe, days)
 
     if data is not None:
         calculate_indicators(data)
