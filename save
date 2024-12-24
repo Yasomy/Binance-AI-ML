@@ -4,13 +4,15 @@ import streamlit as st
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 
 
-# Функция для получения данных с Coinbase API
+# Функция для получения данных с Kraken API
 @st.cache_data(ttl=60)
-def fetch_coinbase_data(symbol='BTC-USD', timeframe='1m', days=1):
+def fetch_kraken_data(symbol='BTC/USD', timeframe='1m', days=1):
     try:
-        exchange = ccxt.coinbase()  # Используем Coinbase API
+        exchange = ccxt.kraken()  # Используем Kraken API
         since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)  # Данные за заданное количество дней
         until = int(datetime.now().timestamp() * 1000)  # Включить текущий момент
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since)
@@ -20,11 +22,11 @@ def fetch_coinbase_data(symbol='BTC-USD', timeframe='1m', days=1):
         data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
         return data
     except Exception as e:
-        st.error(f"Ошибка при запросе данных: {e}")
+        st.error(f"Ошибка при запросе данных с Kraken: {e}")
         return None
 
 
-# Функция для расчета индикаторов
+# Функция для расчета индикаторов (без изменений)
 def calculate_indicators(data):
     # Скользящая средняя (SMA)
     data['SMA50'] = data['close'].rolling(window=50).mean()
@@ -51,11 +53,11 @@ def calculate_indicators(data):
 
     # Stochastic Oscillator
     data['Stochastic_K'] = ((data['close'] - data['low'].rolling(window=14).min()) /
-                            (data['high'].rolling(window=14).max() - data['low'].rolling(window=14).min())) * 100
+                             (data['high'].rolling(window=14).max() - data['low'].rolling(window=14).min())) * 100
     data['Stochastic_D'] = data['Stochastic_K'].rolling(window=3).mean()
 
 
-# Генерация всех торговых сигналов
+# Генерация всех торговых сигналов (без изменений)
 def generate_signals(data):
     signals = []
     details = {}
@@ -110,143 +112,107 @@ def generate_signals(data):
     return signals, details
 
 
-# Функции для отображения графиков индикаторов с использованием Plotly
+# Функция для построения прогноза цены (используем линейную регрессию)
+def predict_price(data):
+    # Используем последние 30 значений закрытия для обучения модели
+    recent_data = data[['timestamp', 'close']].tail(30)
+
+    # Преобразуем время в числовой формат (метки времени)
+    recent_data['timestamp'] = recent_data['timestamp'].apply(lambda x: x.timestamp())
+
+    # Обучаем модель линейной регрессии
+    X = recent_data['timestamp'].values.reshape(-1, 1)
+    y = recent_data['close'].values
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    # Прогнозируем цену на следующий момент
+    next_timestamp = recent_data['timestamp'].values[-1] + (recent_data['timestamp'].values[-1] - recent_data['timestamp'].values[-2])
+    predicted_price = model.predict([[next_timestamp]])
+
+    # Метрики качества прогноза
+    mse = mean_squared_error(y, model.predict(X))
+    r2 = r2_score(y, model.predict(X))
+
+    return predicted_price[0], mse, r2
+
+
+# Функция для отображения графика цен
 def plot_price_chart(data):
-    st.write("### Общий график цен")
+    """
+    Функция для построения графика свечей (OHLC).
+    """
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['close'], mode='lines', name='Цена закрытия', line=dict(color='blue')))
-    fig.update_layout(title='График цен', xaxis_title='Время', yaxis_title='Цена (USD)')
+
+    # Добавляем график свечей
+    fig.add_trace(go.Candlestick(
+        x=data['timestamp'],
+        open=data['open'],
+        high=data['high'],
+        low=data['low'],
+        close=data['close'],
+        name="Цена"
+    ))
+
+    # Настройки осей
+    fig.update_layout(
+        title="График цен",
+        xaxis_title="Время",
+        yaxis_title="Цена",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark"
+    )
     st.plotly_chart(fig)
 
 
-def plot_sma_chart(data):
-    st.write("#### SMA (50)")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['close'], mode='lines', name='Цена закрытия', line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['SMA50'], mode='lines', name='SMA (50)', line=dict(color='red')))
-    fig.update_layout(title='SMA (50)', xaxis_title='Время', yaxis_title='Цена (USD)')
-    st.plotly_chart(fig)
+# Функция для отображения прогнозируемой цены и качества прогноза
+def display_price_prediction(predicted_price, mse, r2):
+    st.subheader("Прогнозируемая цена на следующий момент")
+    st.write(f"Прогнозируемая цена: ${predicted_price:.2f}")
+    st.write(f"Среднеквадратичная ошибка (MSE): {mse:.2f}")
+    st.write(f"Коэффициент детерминации (R²): {r2:.2f}")
 
 
-def plot_bollinger_chart(data):
-    st.write("#### Bollinger Bands")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['close'], mode='lines', name='Цена закрытия', line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['BB_Upper'], mode='lines', name='Верхняя полоса Боллинджера', line=dict(color='green', dash='dash')))
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['BB_Lower'], mode='lines', name='Нижняя полоса Боллинджера', line=dict(color='red', dash='dash')))
-    fig.update_layout(title='Bollinger Bands', xaxis_title='Время', yaxis_title='Цена (USD)')
-    st.plotly_chart(fig)
-
-
-def plot_stochastic_chart(data):
-    st.write("#### Stochastic Oscillator")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['Stochastic_K'], mode='lines', name='%K', line=dict(color='purple')))
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['Stochastic_D'], mode='lines', name='%D', line=dict(color='orange', dash='dash')))
-    fig.update_layout(title='Stochastic Oscillator', xaxis_title='Время', yaxis_title='Стохастик')
-    st.plotly_chart(fig)
-
-
-def plot_macd_chart(data):
-    st.write("#### MACD")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['MACD'], mode='lines', name='MACD', line=dict(color='cyan')))
-    fig.add_trace(go.Scatter(x=data['timestamp'], y=data['Signal Line'], mode='lines', name='Сигнальная линия MACD', line=dict(color='magenta', dash='dash')))
-    fig.update_layout(title='MACD', xaxis_title='Время', yaxis_title='MACD')
-    st.plotly_chart(fig)
-
-
-# Основная функция Streamlit
+# Главная функция приложения
 def main():
-    st.set_page_config(page_title="Криптовалютный анализ", layout="wide")
+    st.title("Анализ криптовалютных рынков")
 
-    # Заголовок
-    st.title("Криптовалютный анализ")
-
-    # Боковая панель для управления параметрами
-    st.sidebar.header("Настройки")
-
-    # Выбор криптовалютной пары
-    symbol = st.sidebar.selectbox(
-        "Выберите пару",
-        ['BTC-USD', 'ETH-USD', 'SOL-USD', 'ADA-USD', 'DOGE-USD']
-    )
-
-    # Выбор временного интервала
+    symbol = st.sidebar.selectbox("Выберите валютную пару", ["BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD"])
     timeframe = st.sidebar.selectbox(
-        "Выберите временной интервал",
-        ['1m', '5m', '15m', '1h', '1d']
-    )
+        "Выберите временной интервал", ['1m', '5m', '15m', '1h', '1d'])
+    days = st.sidebar.slider("Количество дней", 1, 30, 7)
 
-    # Выбор количества дней для загрузки данных
-    days = st.sidebar.slider(
-        "Количество дней для загрузки данных",
-        min_value=1, max_value=30, value=1
-    )
+    # Получаем данные с Kraken
+    data = fetch_kraken_data(symbol, timeframe, days)
+    if data is None:
+        return
 
-    # Выбор отображаемых индикаторов
-    show_sma = st.sidebar.checkbox("Показать SMA", value=True)
-    show_bollinger = st.sidebar.checkbox("Показать Bollinger Bands", value=True)
-    show_stochastic = st.sidebar.checkbox("Показать Stochastic", value=True)
-    show_macd = st.sidebar.checkbox("Показать MACD", value=True)
+    # Отображаем график цен
+    plot_price_chart(data)
 
-    # Интервал автообновления
-    refresh_interval = st.sidebar.number_input(
-        "Интервал автообновления (в секундах)",
-        min_value=10, max_value=3600, value=60
-    )
-    st_autorefresh(interval=refresh_interval * 1000, limit=None, key="auto_refresh")
+    # Расчёт индикаторов
+    calculate_indicators(data)
 
-    # Заголовок выбранной пары
-    st.subheader(f"Анализ пары: {symbol}")
+    # Прогнозирование цены
+    predicted_price, mse, r2 = predict_price(data)
+    display_price_prediction(predicted_price, mse, r2)
 
-    # Получение данных
-    with st.spinner("Загружаются данные..."):
-        data = fetch_coinbase_data(symbol, timeframe, days)
+    # Генерация торговых сигналов
+    signals, details = generate_signals(data)
 
-    if data is not None:
-        calculate_indicators(data)
-
-        # Общий график цен
-        plot_price_chart(data)
-
-        # Разделить экран на 4 части для индикаторов
-        st.write("### Индикаторы")
-        col1, col2 = st.columns(2)
-        col3, col4 = st.columns(2)
-
-        # Графики индикаторов
-        with col1:
-            if show_sma:
-                plot_sma_chart(data)
-
-        with col2:
-            if show_bollinger:
-                plot_bollinger_chart(data)
-
-        with col3:
-            if show_stochastic:
-                plot_stochastic_chart(data)
-
-        with col4:
-            if show_macd:
-                plot_macd_chart(data)
-
-        # Текущая информация
-        st.write("### Текущая информация")
-        st.write(f"Последнее обновление: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        st.write(f"Цена закрытия: {data['close'].iloc[-1]:.2f} USD")
-
-        # Торговые сигналы
-        signals, details = generate_signals(data)
-        st.write("### Торговые сигналы")
+    # Отображение торговых сигналов
+    st.subheader("Торговые сигналы")
+    if signals:
         for signal in signals:
-            st.write(f"- {signal}")
+            st.write(signal)
+    else:
+        st.write("Нет явных торговых сигналов на данный момент.")
 
-        # Детали индикаторов
-        st.write("### Детали индикаторов")
-        for key, value in details.items():
-            st.write(f"- {key}: {value}")
+    # Подробности индикаторов
+    st.subheader("Подробности")
+    for key, value in details.items():
+        st.write(f"{key}: {value}")
 
 
 if __name__ == "__main__":
