@@ -3,14 +3,17 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-from streamlit_autorefresh import st_autorefresh
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
+from streamlit_autorefresh import st_autorefresh  # Импортируем функцию для автообновления
+import logging  # Импортируем модуль логирования
 
+# Настройка логирования
+logging.basicConfig(filename='kraken_data_fetch.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Функция для получения данных с Kraken API
+# Функция для получения данных с Kraken API с оптимизированным кешированием
 @st.cache_data(ttl=60)
-def fetch_kraken_data(symbol='BTC/USD', timeframe='1m', days=1):
+def fetch_kraken_data(symbol='BTC/USD', timeframe='1m', days=1, cache_duration=60):
     try:
         exchange = ccxt.kraken()  # Используем Kraken API
         since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)  # Данные за заданное количество дней
@@ -20,13 +23,38 @@ def fetch_kraken_data(symbol='BTC/USD', timeframe='1m', days=1):
         # Преобразуем данные в DataFrame
         data = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
         data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+
+        # Управление кешированием в зависимости от количества дней
+        if days > 7:  # Если данных много, увеличиваем ttl кеша
+            cache_duration = 300  # Кешируем данные на 5 минут для больших периодов
         return data
+
+    except ccxt.NetworkError as e:
+        error_message = f"Ошибка сети при запросе данных с Kraken: {e}"
+        logging.error(error_message)
+        st.error("Проблемы с подключением к Kraken. Пожалуйста, попробуйте позже.")
+        return None
+
+    except ccxt.ExchangeError as e:
+        error_message = f"Ошибка обмена при запросе данных с Kraken: {e}"
+        logging.error(error_message)
+        st.error("Ошибка обмена данных с Kraken. Пожалуйста, попробуйте позже.")
+        return None
+
+    except ccxt.BaseError as e:
+        error_message = f"Ошибка при запросе данных с Kraken: {e}"
+        logging.error(error_message)
+        st.error("Произошла ошибка при запросе данных с Kraken. Пожалуйста, попробуйте позже.")
+        return None
+
     except Exception as e:
-        st.error(f"Ошибка при запросе данных с Kraken: {e}")
+        error_message = f"Неизвестная ошибка: {e}"
+        logging.error(error_message)
+        st.error("Произошла неизвестная ошибка. Пожалуйста, попробуйте позже.")
         return None
 
 
-# Функция для расчета индикаторов (без изменений)
+# Функция для расчета индикаторов (SMA, RSI, MACD, Bollinger Bands, Stochastic)
 def calculate_indicators(data):
     # Скользящая средняя (SMA)
     data['SMA50'] = data['close'].rolling(window=50).mean()
@@ -53,11 +81,67 @@ def calculate_indicators(data):
 
     # Stochastic Oscillator
     data['Stochastic_K'] = ((data['close'] - data['low'].rolling(window=14).min()) /
-                             (data['high'].rolling(window=14).max() - data['low'].rolling(window=14).min())) * 100
+                            (data['high'].rolling(window=14).max() - data['low'].rolling(window=14).min())) * 100
     data['Stochastic_D'] = data['Stochastic_K'].rolling(window=3).mean()
 
 
-# Генерация всех торговых сигналов (без изменений)
+# Функция для построения прогноза цены (используем линейную регрессию)
+def predict_price(data):
+    # Используем последние 30 значений закрытия для обучения модели
+    recent_data = data[['timestamp', 'close']].tail(30)
+
+    # Преобразуем время в числовой формат (метки времени)
+    recent_data['timestamp'] = recent_data['timestamp'].astype(
+        'int64') // 10 ** 9  # Преобразование в метки времени Unix
+
+    # Обучаем модель линейной регрессии
+    X = recent_data['timestamp'].values.reshape(-1, 1)
+    y = recent_data['close'].values
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    # Прогнозируем цену на следующий момент
+    next_timestamp = recent_data['timestamp'].values[-1] + (
+                recent_data['timestamp'].values[-1] - recent_data['timestamp'].values[-2])
+    predicted_price = model.predict([[next_timestamp]])
+
+    # Метрики качества прогноза
+    mse = mean_squared_error(y, model.predict(X))
+    r2 = r2_score(y, model.predict(X))
+
+    return predicted_price[0], mse, r2
+
+
+# Функция для отображения графика цен (свечи OHLC)
+def plot_price_chart(data):
+    """
+    Функция для построения графика свечей (OHLC).
+    """
+    fig = go.Figure()
+
+    # Добавляем график свечей
+    fig.add_trace(go.Candlestick(
+        x=data['timestamp'],
+        open=data['open'],
+        high=data['high'],
+        low=data['low'],
+        close=data['close'],
+        name="Цена"
+    ))
+
+    # Настройки осей
+    fig.update_layout(
+        title="График цен",
+        xaxis_title="Время",
+        yaxis_title="Цена",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark"
+    )
+    st.plotly_chart(fig)
+
+
+# Генерация всех торговых сигналов
 def generate_signals(data):
     signals = []
     details = {}
@@ -112,60 +196,6 @@ def generate_signals(data):
     return signals, details
 
 
-# Функция для построения прогноза цены (используем линейную регрессию)
-def predict_price(data):
-    # Используем последние 30 значений закрытия для обучения модели
-    recent_data = data[['timestamp', 'close']].tail(30)
-
-    # Преобразуем время в числовой формат (метки времени)
-    recent_data['timestamp'] = recent_data['timestamp'].apply(lambda x: x.timestamp())
-
-    # Обучаем модель линейной регрессии
-    X = recent_data['timestamp'].values.reshape(-1, 1)
-    y = recent_data['close'].values
-
-    model = LinearRegression()
-    model.fit(X, y)
-
-    # Прогнозируем цену на следующий момент
-    next_timestamp = recent_data['timestamp'].values[-1] + (recent_data['timestamp'].values[-1] - recent_data['timestamp'].values[-2])
-    predicted_price = model.predict([[next_timestamp]])
-
-    # Метрики качества прогноза
-    mse = mean_squared_error(y, model.predict(X))
-    r2 = r2_score(y, model.predict(X))
-
-    return predicted_price[0], mse, r2
-
-
-# Функция для отображения графика цен
-def plot_price_chart(data):
-    """
-    Функция для построения графика свечей (OHLC).
-    """
-    fig = go.Figure()
-
-    # Добавляем график свечей
-    fig.add_trace(go.Candlestick(
-        x=data['timestamp'],
-        open=data['open'],
-        high=data['high'],
-        low=data['low'],
-        close=data['close'],
-        name="Цена"
-    ))
-
-    # Настройки осей
-    fig.update_layout(
-        title="График цен",
-        xaxis_title="Время",
-        yaxis_title="Цена",
-        xaxis_rangeslider_visible=False,
-        template="plotly_dark"
-    )
-    st.plotly_chart(fig)
-
-
 # Функция для отображения прогнозируемой цены и качества прогноза
 def display_price_prediction(predicted_price, mse, r2):
     st.subheader("Прогнозируемая цена на следующий момент")
@@ -177,6 +207,15 @@ def display_price_prediction(predicted_price, mse, r2):
 # Главная функция приложения
 def main():
     st.title("Анализ криптовалютных рынков")
+
+    # Добавляем ползунок для изменения времени обновления
+    refresh_interval = st.sidebar.slider(
+        "Время обновления данных (в секундах)",
+        5, 60, 20, 1
+    )
+
+    # Настроить автообновление данных с выбранным интервалом
+    st_autorefresh(interval=refresh_interval * 1000)
 
     symbol = st.sidebar.selectbox("Выберите валютную пару", ["BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD"])
     timeframe = st.sidebar.selectbox(
@@ -190,6 +229,10 @@ def main():
 
     # Отображаем график цен
     plot_price_chart(data)
+
+    # Отображаем текущую цену
+    last_close_price = data['close'].iloc[-1]
+    st.write(f"Текущая цена за последний лот: ${last_close_price:.2f}")
 
     # Расчёт индикаторов
     calculate_indicators(data)
