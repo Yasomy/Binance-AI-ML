@@ -1,0 +1,260 @@
+import ccxt
+import pandas as pd
+import streamlit as st
+from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+
+
+# Функция для получения данных с Kraken API
+@st.cache_data(ttl=60)
+def fetch_kraken_data(symbol='BTC/USD', timeframe='1m', days=1):
+    try:
+        exchange = ccxt.kraken()  # Используем Kraken API
+        since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)  # Данные за заданное количество дней
+        until = int(datetime.now().timestamp() * 1000)  # Включить текущий момент
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since)
+
+        # Преобразуем данные в DataFrame
+        data = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
+        return data
+    except Exception as e:
+        st.error(f"Ошибка при запросе данных с Kraken: {e}")
+        return None
+
+
+# Функция для получения текущей цены криптовалюты и другой информации
+def fetch_ticker_data(symbol='BTC/USD'):
+    try:
+        exchange = ccxt.kraken()  # Используем Kraken API
+        ticker = exchange.fetch_ticker(symbol)  # Получаем данные тикера
+        current_price = ticker['last']  # Последняя цена
+        percentage_change = ticker['percentage']  # Изменение за 24 часа в процентах
+        volume = ticker['quoteVolume']  # Объем торгов за 24 часа
+        market_cap = ticker.get('market_cap', 'N/A')  # Рыночная капитализация (если доступна)
+        return current_price, percentage_change, volume, market_cap
+    except Exception as e:
+        st.error(f"Ошибка при получении данных тикера: {e}")
+        return None, None, None, None
+
+
+# Функция для отображения данных как в Binance
+def display_extended_info(symbol):
+    current_price, percentage_change, volume, market_cap = fetch_ticker_data(symbol)
+    if current_price is not None:
+        change_color = "#16c784" if percentage_change >= 0 else "#ea3943"  # Цвет для отображения изменения
+        st.markdown(f"""
+            <div style="text-align: left; font-family: Arial, sans-serif;">
+                <h1 style="color: #f7931a; font-size: 28px;">Цена {symbol.split('/')[0]} сегодня</h1>
+                <p style="font-size: 20px; margin: 0;">Текущая цена {symbol.split('/')[0]} составляет <b>${current_price:,.2f} USD</b> за ({symbol})</p>
+                <p style="font-size: 16px; color: {change_color}; margin: 0;">{percentage_change:.2f}% за последние 24 часа</p>
+                <p style="font-size: 16px; margin: 0;">Объем торгов за 24 часа: <b>${volume:,.2f} USD</b></p>
+                <p style="font-size: 16px; margin: 0;">Рыночная капитализация: <b>${market_cap}</b></p>
+            </div>
+        """, unsafe_allow_html=True)
+
+
+# Функция для расчета индикаторов (без изменений)
+def calculate_indicators(data):
+    # Скользящая средняя (SMA)
+    data['SMA50'] = data['close'].rolling(window=50).mean()
+
+    # RSI
+    delta = data['close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    data['RSI'] = 100 - (100 / (1 + rs))
+
+    # MACD
+    ema12 = data['close'].ewm(span=12, adjust=False).mean()
+    ema26 = data['close'].ewm(span=26, adjust=False).mean()
+    data['MACD'] = ema12 - ema26
+    data['Signal Line'] = data['MACD'].ewm(span=9, adjust=False).mean()
+
+    # Bollinger Bands
+    data['BB_Mid'] = data['close'].rolling(window=20).mean()
+    data['BB_Upper'] = data['BB_Mid'] + 2 * data['close'].rolling(window=20).std()
+    data['BB_Lower'] = data['BB_Mid'] - 2 * data['close'].rolling(window=20).std()
+
+    # Stochastic Oscillator
+    data['Stochastic_K'] = ((data['close'] - data['low'].rolling(window=14).min()) /
+                             (data['high'].rolling(window=14).max() - data['low'].rolling(window=14).min())) * 100
+    data['Stochastic_D'] = data['Stochastic_K'].rolling(window=3).mean()
+
+
+# Генерация всех торговых сигналов (без изменений)
+def generate_signals(data):
+    signals = []
+    details = {}
+
+    # RSI
+    rsi_value = data['RSI'].iloc[-1]
+    if rsi_value < 30:
+        signals.append("Покупка: Актив перепродан, RSI ниже 30.")
+        details['RSI'] = f"RSI = {rsi_value:.2f} (перепродан)"
+    elif rsi_value > 70:
+        signals.append("Продажа: Актив перекуплен, RSI выше 70.")
+        details['RSI'] = f"RSI = {rsi_value:.2f} (перекуплен)"
+    else:
+        details['RSI'] = f"RSI = {rsi_value:.2f} (нейтрально)"
+
+    # MACD
+    macd_value = data['MACD'].iloc[-1]
+    signal_line = data['Signal Line'].iloc[-1]
+    if macd_value > signal_line:
+        signals.append("Покупка: MACD пересек сигнальную линию снизу вверх.")
+        details['MACD'] = f"MACD = {macd_value:.2f}, Сигнальная линия = {signal_line:.2f} (бычий сигнал)"
+    elif macd_value < signal_line:
+        signals.append("Продажа: MACD пересек сигнальную линию сверху вниз.")
+        details['MACD'] = f"MACD = {macd_value:.2f}, Сигнальная линия = {signal_line:.2f} (медвежий сигнал)"
+    else:
+        details['MACD'] = f"MACD = {macd_value:.2f}, Сигнальная линия = {signal_line:.2f} (нейтрально)"
+
+    # Bollinger Bands
+    bb_upper = data['BB_Upper'].iloc[-1]
+    bb_lower = data['BB_Lower'].iloc[-1]
+    close_price = data['close'].iloc[-1]
+    if close_price > bb_upper:
+        signals.append("Продажа: Цена выше верхней полосы Боллинджера (перекупленность).")
+        details['Bollinger Bands'] = f"Цена = {close_price:.2f}, Верхняя полоса = {bb_upper:.2f} (перекупленность)"
+    elif close_price < bb_lower:
+        signals.append("Покупка: Цена ниже нижней полосы Боллинджера (перепроданность).")
+        details['Bollinger Bands'] = f"Цена = {close_price:.2f}, Нижняя полоса = {bb_lower:.2f} (перепроданность)"
+    else:
+        details['Bollinger Bands'] = f"Цена = {close_price:.2f} (в пределах полос)"
+
+    # Stochastic Oscillator
+    stochastic_k = data['Stochastic_K'].iloc[-1]
+    if stochastic_k > 80:
+        signals.append("Продажа: Стохастик показывает перекупленность (>80).")
+        details['Stochastic'] = f"%K = {stochastic_k:.2f} (перекупленность)"
+    elif stochastic_k < 20:
+        signals.append("Покупка: Стохастик показывает перепроданность (<20).")
+        details['Stochastic'] = f"%K = {stochastic_k:.2f} (перепроданность)"
+    else:
+        details['Stochastic'] = f"%K = {stochastic_k:.2f} (нейтрально)"
+
+    return signals, details
+
+
+# Функция для построения прогноза цены (используем линейную регрессию)
+def predict_price(data):
+    # Используем последние 30 значений закрытия для обучения модели
+    recent_data = data[['timestamp', 'close']].tail(30)
+
+    # Преобразуем время в числовой формат (метки времени)
+    recent_data['timestamp'] = recent_data['timestamp'].apply(lambda x: x.timestamp())
+
+    # Обучаем модель линейной регрессии
+    X = recent_data['timestamp'].values.reshape(-1, 1)
+    y = recent_data['close'].values
+
+    model = LinearRegression()
+    model.fit(X, y)
+
+    # Прогнозируем цену на следующий момент
+    next_timestamp = recent_data['timestamp'].values[-1] + (recent_data['timestamp'].values[-1] - recent_data['timestamp'].values[-2])
+    predicted_price = model.predict([[next_timestamp]])
+
+    # Метрики качества прогноза
+    mse = mean_squared_error(y, model.predict(X))
+    r2 = r2_score(y, model.predict(X))
+
+    return predicted_price[0], mse, r2
+
+
+# Функция для отображения графика цен
+def plot_price_chart(data):
+    """
+    Функция для построения графика свечей (OHLC).
+    """
+    fig = go.Figure()
+
+    # Добавляем график свечей
+    fig.add_trace(go.Candlestick(
+        x=data['timestamp'],
+        open=data['open'],
+        high=data['high'],
+        low=data['low'],
+        close=data['close'],
+        name="Цена"
+    ))
+
+    # Настройки осей
+    fig.update_layout(
+        title="График цен",
+        xaxis_title="Время",
+        yaxis_title="Цена",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark"
+    )
+    st.plotly_chart(fig)
+
+
+# Функция для отображения прогнозируемой цены и качества прогноза
+def display_price_prediction(predicted_price, mse, r2):
+    st.subheader("Прогнозируемая цена на следующий момент")
+    st.write(f"Прогнозируемая цена: ${predicted_price:.2f}")
+    st.write(f"Среднеквадратичная ошибка (MSE): {mse:.2f}")
+    st.write(f"Коэффициент детерминации (R²): {r2:.2f}")
+
+
+# Главная функция приложения
+def main():
+    st.title("Анализ криптовалютных рынков")
+
+    # Ползунок для выбора интервала обновления
+    refresh_interval = st.sidebar.slider("Время обновления данных (в секундах)", 5, 60, 30)
+
+    # Автоматическое обновление
+    st_autorefresh(interval=refresh_interval * 1000, key="autorefresh")
+
+    symbol = st.sidebar.selectbox("Выберите валютную пару", ["BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD"])
+
+    # Новый вызов для отображения текущей цены и расширенной информации
+    display_extended_info(symbol)
+
+    timeframe = st.sidebar.selectbox(
+        "Выберите временной интервал", ['1m', '5m', '15m', '1h', '1d'])
+    days = st.sidebar.slider("Количество дней", 1, 30, 7)
+
+    # Получаем данные с Kraken
+    data = fetch_kraken_data(symbol, timeframe, days)
+    if data is None:
+        return
+
+    # Отображаем график цен
+    plot_price_chart(data)
+
+    # Расчёт индикаторов
+    calculate_indicators(data)
+
+    # Прогнозирование цены
+    predicted_price, mse, r2 = predict_price(data)
+    display_price_prediction(predicted_price, mse, r2)
+
+    # Генерация торговых сигналов
+    signals, details = generate_signals(data)
+
+    # Отображение торговых сигналов
+    st.subheader("Торговые сигналы")
+    if signals:
+        for signal in signals:
+            st.write(signal)
+    else:
+        st.write("Нет явных торговых сигналов на данный момент.")
+
+    # Подробности индикаторов
+    st.subheader("Подробности")
+    for key, value in details.items():
+        st.write(f"{key}: {value}")
+
+
+if __name__ == "__main__":
+    main()
