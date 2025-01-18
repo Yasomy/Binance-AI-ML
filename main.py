@@ -4,18 +4,18 @@ import streamlit as st
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
-
+from ai_model import predict_price
 
 # Функция для получения данных с Kraken API
 @st.cache_data(ttl=60)
 def fetch_kraken_data(symbol='BTC/USD', timeframe='1m', days=1):
     try:
-        exchange = ccxt.kraken()  # Используем Kraken API
+        exchange = ccxt.kraken()
         since = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)  # Данные за заданное количество дней
-        until = int(datetime.now().timestamp() * 1000)  # Включить текущий момент
+        until = int(datetime.now().timestamp() * 1000)
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since)
 
-        # Преобразуем данные в DataFrame
+
         data = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
         data['timestamp'] = pd.to_datetime(data['timestamp'], unit='ms')
         return data
@@ -247,6 +247,12 @@ def main():
         with col4:
             if show_macd:
                 plot_macd_chart(data)
+
+        # Отображение прогноза
+        st.write("### Прогноз цены")
+        prediction, direction = predict_price(data, window=60)
+        st.write(f"Прогнозируемая цена на следующую минуту: {prediction:.2f} USD")
+        st.write(f"Ожидаемое направление изменения цены: {direction}")
 
         # Текущая информация
         st.write("### Текущая информация")
