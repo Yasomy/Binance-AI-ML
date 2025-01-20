@@ -250,7 +250,7 @@ def main():
 
         # Отображение прогноза
         st.write("### Прогноз цены")
-        prediction, direction = predict_price(data, window=60)
+        prediction, direction = predict_price(data)
         st.write(f"Прогнозируемая цена на следующую минуту: {prediction:.2f} USD")
         st.write(f"Ожидаемое направление изменения цены: {direction}")
 
